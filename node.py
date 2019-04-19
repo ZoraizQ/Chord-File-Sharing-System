@@ -489,9 +489,9 @@ def main(argv):
     output_label = tk.Label(btnFrame, text="OUTPUT HERE") # Label - text widget, pack method tells where to put the widget    
     create_btn = tk.Button(btnFrame, text="Create", command=new_node.create()) # Button widget created on root window
     join_btn = tk.Button(btnFrame, text="Join") 
-    leave_btn = tk.Button(btnFrame, text="Leave")
-    put_btn = tk.Button(btnFrame, text="Put")
-    get_btn = tk.Button(btnFrame, text="Get")
+    leave_btn = tk.Button(btnFrame, text="Leave", state="DISABLED")
+    put_btn = tk.Button(btnFrame, text="Put", state="DISABLED")
+    get_btn = tk.Button(btnFrame, text="Get", state="DISABLED")
     # frame can be repositioned, so moving the UI widgets together is possible
     
     # pack, place, grid
