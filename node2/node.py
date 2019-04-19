@@ -5,8 +5,6 @@ from _thread import *
 import threading
 import time
 import os
-from tkinter import *
-import tkinter as tk
 
 #0..2^m-1
 m = 7 # if m = 7, keyspace is 0 to 127, size = 128 (2^m)
@@ -165,13 +163,7 @@ class Node():
 
 
     def create(self):
-        if self.active:
-            return False
-
         self.active = True
-        # disable create, join button
-        # enable put, get buttons
-
         print(f"This node {self.name} created a network.")
         # all fingers should point to myself
         self.predecessor = (self.id, self.name) # none
@@ -184,13 +176,7 @@ class Node():
     
     # Chord efficiently adapts as a node joins/leaves the system
     def join(self, joiner_name): # bootstrap, update other's finger_tables as well        
-        if self.active:
-            return False
-
         self.active = True
-        # disable create, join button
-        # enable put, get buttons
-        
         self.lt.start()
         print(f"Joining the network using the node {joiner_name}.")
         # update routing information -- finger table, keystore
@@ -298,13 +284,6 @@ class Node():
             self.notifySuccessor()
 
     def leave(self):
-        if not self.active:
-            return False
-
-        self.active = False
-        # enable create, join button
-        # disable put, get button
-
         print("Formally leaving the network.")
         #keys reassigned to successor, also transferred
 
@@ -316,9 +295,6 @@ class Node():
         return get_hashedName
 
     def put(self, filename):
-        if not self.active:
-            return False
-
         if filename == "": # empty string for filename
             return False
 
@@ -346,9 +322,6 @@ class Node():
         return obtained_filePack[1]
 
     def get(self, filename):
-        if not self.active:
-            return False
-
         if filename == "":
             return False
 
@@ -476,65 +449,32 @@ def main(argv):
     # use gethostbyname for IP later
     new_node = Node(host_ip, port) # listening starts right inside the constructor
     
-    root = tk.Tk() # create window
-    root.geometry('300x300') # dimensions
-    root.title("21100130-DC++")
-    root.resizable(False, True) # not resizable now both vertically and horizontally
-
-    detailFrame = tk.Frame(root) # frame widget on root window
-    detail_label = tk.Label(detailFrame, text="DETAIL HERE") # Label - text widget, pack method tells where to put the widget    
-    
-    btnFrame = tk.Frame(root) # frame widget on root window
-    #tk.widget_name(root_window, properties/configuration e.g. text for label widget)
-    output_label = tk.Label(btnFrame, text="OUTPUT HERE") # Label - text widget, pack method tells where to put the widget    
-    create_btn = tk.Button(btnFrame, text="Create", command=new_node.create()) # Button widget created on root window
-    join_btn = tk.Button(btnFrame, text="Join") 
-    leave_btn = tk.Button(btnFrame, text="Leave")
-    put_btn = tk.Button(btnFrame, text="Put")
-    get_btn = tk.Button(btnFrame, text="Get")
-    # frame can be repositioned, so moving the UI widgets together is possible
-    
-    # pack, place, grid
-    detailFrame.pack()
-    detail_label.pack()
-    #btnFrame.pack()
-    btnFrame.place(bordermode=OUTSIDE, height=200, width=200, y=100, x=50)
-    output_label.pack()
-    create_btn.pack()
-    join_btn.pack()
-    leave_btn.pack()
-    put_btn.pack()
-    get_btn.pack()
-    
-    root.mainloop() # make sure the window stays
-    
-    '''
     while(True):
         userin = input(">> ").split(" ")
-        if userin[0] == "create":
+        if (userin[0] == "create" and not new_node.getActive()):
             new_node.create()
-        elif userin[0] == "join":
+        elif (userin[0] == "join" and not new_node.getActive()):
             if not new_node.join("127.0.0.1:"+str(userin[1])):
                 print("Failed to join the network.")
-        elif userin == "leave":
+        elif (userin == "leave" and new_node.getActive()):
             new_node.leave()
-        elif userin[0] == "msg":
+        elif (userin[0] == "msg"):
             send_node_msg(userin[1], input("Enter message here: "))
-        elif userin[0] == "checkactive":
+        elif(userin[0] == "checkactive"):
             if new_node.checkNodeActive(userin[1]):
                 print("That node is active.")
             else:
                 print("Not active.")
-        elif userin[0] == "print":
+        elif (userin[0] == "print"):
             new_node.printInfo()
-        elif userin[0] == "cls":
+        elif (userin[0] == "cls"):
             os.system('clear')
-        elif userin[0] == "put":
+        elif (userin[0] == "put" and new_node.getActive()):
             new_node.put(userin[1])
-        elif userin[0] == "get":
+        elif (userin[0] == "get" and new_node.getActive()):
             new_node.get(userin[1])
-        elif userin[0] == "finds":
+        elif (userin[0] == "finds"):
             print("Found successor:",new_node.find_successor(int(userin[1])))
-    '''
+
 if __name__ == '__main__':
     main(sys.argv[1:])
