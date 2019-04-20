@@ -190,7 +190,7 @@ class Node():
 
         print(f"This node {self.name} created a network.")
         # all fingers should point to myself
-        self.predecessor = (self.id, self.name) # none
+        self.predecessor = (-1, "") # none
         self.successor = (self.id, self.name) # itself
         for i in range(len(self.finger_table)): # 1 to m, replace the node itself on all entries
             self.finger_table[i] = [self.id, self.name]
@@ -221,13 +221,12 @@ class Node():
         # certain keys previously assigned to this node’s successor now become assigned to it
         # when (n+1) node joins/leaves -> responsibility change
         # be aware of successor
+        self.predecessor = (-1, "")
         newsuccessor = send_and_get_response(joiner_name, "@JOIN,"+self.name)
         if newsuccessor != "":
             self.setSuccessor(newsuccessor)
             for i in range(len(self.finger_table)): # 1 to m, replace the node itself on all entries
                 self.finger_table[i] = [self.successor[0], self.successor[1]]
-        
-        self.notifySuccessor()
         
         # if some of my keys belong to the new joiner, send them to him 
         for key in self.keystore: 
@@ -260,16 +259,16 @@ class Node():
     def checkNodeActive(self, nodename):
         if nodename == "":
             return False
-        pings = 0
-        while(pings != 3):
+        pings = 3
+        while(pings != 0):
             response = send_and_get_response(nodename, "@ACTIVE?")
             if response == "":
                 return False
             elif response == "@YESACTIVE":
-                pings += 1
+                pings -= 1
             else:
                 return False
-            time.sleep(0.05) # delay between pings
+            time.sleep(0.03) # delay between pings
         return True
 
     def isPredecessorActive(self):
@@ -312,25 +311,28 @@ class Node():
     def stabilizer(self):
         global isStabilizing
         while isStabilizing:
-            time.sleep(3)
+            time.sleep(0.5)
             #print("Stabilizing...")
             #self.isSuccessorActive() # successor lists
-            #self.isPredecessorActive()
-            #self.stabilize() #ruins my successor
+            self.isPredecessorActive()
+            self.stabilize() #ruins my successor
             self.fix_finger_table()
         print("Shutting down stabilization.")
             
     def stabilize(self):
         # ask successor about predecessor
-        successor_pred_x = send_and_get_response(self.successor[1], "@GIVE_P")
-        # verifies if my immediate successor is consistent (no node x has come in between us, if it has that x is our successor)
-        if successor_pred_x != "":
-            successor_pred_x_id = stringHasher(successor_pred_x)
-            if (successor_pred_x_id > self.id and successor_pred_x_id < self.successor[0]):
-                self.setSuccessor(successor_pred_x)
-            elif (successor_pred_x_id < self.id or successor_pred_x_id > self.successor[0]):
-                self.setSuccessor(successor_pred_x)
-            self.notifySuccessor()
+        if self.predecessor[1] != self.name: 
+            successor_pred_x = send_and_get_response(self.successor[1], "@GIVE_P")
+            # verifies if my immediate successor is consistent (no node x has come in between us, if it has that x is our successor)
+            if successor_pred_x != "":
+                successor_pred_x_id = stringHasher(successor_pred_x)
+                if self.successor[1] == self.name:
+                    self.setSuccessor(successor_pred_x) 
+                elif (successor_pred_x_id > self.id and successor_pred_x_id < self.successor[0]):
+                    self.setSuccessor(successor_pred_x)
+                elif (successor_pred_x_id < self.id or successor_pred_x_id > self.successor[0]):
+                    self.setSuccessor(successor_pred_x)
+        self.notifySuccessor()
 
     def leave(self):
         if not self.active:
@@ -511,7 +513,8 @@ class Node():
             isCorrect = False # assumption to think they are my predecessor is false initially
             updateSucc = True
             if old_pred_name == "":
-                isCorrect = True
+                self.setPredecessor(new_pred_name)
+                isCorrect = False
             elif old_pred_name == self.name:
                 updateSucc = True
                 isCorrect = True
@@ -521,8 +524,8 @@ class Node():
                 isCorrect = True
             #print(isCorrect)
             if isCorrect:
-                if updateSucc:
-                    send_node_msg(old_pred_name, "@UPDATE_S,"+new_pred_name) # tell old predecessor to update their successor to this node's new predecessor
+                #if updateSucc:
+                #    send_node_msg(old_pred_name, "@UPDATE_S,"+new_pred_name) # tell old predecessor to update their successor to this node's new predecessor
                 send_packet(client_sock, old_pred_name) # respond to new predecessor to update their predecessor to this node's old predecessor
                 self.setPredecessor(new_pred_name)
             else:
