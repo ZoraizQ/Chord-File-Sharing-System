@@ -5,6 +5,8 @@ from _thread import *
 import threading
 import time
 import os
+from tkinter import *
+import tkinter as tk
 
 #0..2^m-1
 m = 7 # if m = 7, keyspace is 0 to 127, size = 128 (2^m)
@@ -20,11 +22,9 @@ def recv_packet(c_sock):
     if not testdata:
         return ""
     packet_size = testdata.decode('utf-8') # pick the first 1 byte (normal size of chars)
-    #print(packet_size)
     while "%" not in packet_size:
         packet_size += c_sock.recv(1).decode('utf-8') # recieve 1 byte every time
-        #print(packet_size)
-
+    
     packet_size = int(packet_size[:-1])
     packet = c_sock.recv(packet_size).decode('utf-8')
     return packet
@@ -63,11 +63,28 @@ def send_and_get_response(name, packet):
     return response
 
 def send_node_key(nodename, f_id, filename, file_contents):
-    print(f"Uploading {filename} to node {nodename} with contents: ")
-    print(file_contents)
-    filePack = (filename, file_contents)
-    send_node_msg(nodename, "@PUT," + pickle.dumps(filePack, 0).decode()) # using protocol 0 results in shorter strings
-    # divide file into chunks later
+    print(f"Uploading {filename} to node {nodename}")
+
+    packet = "@PUT," + filename
+    server_ip, server_portstr = nodename.split(':')
+    server_port = int(server_portstr)
+    node_client_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    node_client_sock.connect((server_ip, server_port))
+    send_packet(node_client_sock, packet)
+    
+    f = open(filename,'rb')
+    l = f.read(128)
+    while (l):
+       node_client_sock.send(l)
+       print('Sent ',l)
+       l = f.read(128)
+    f.close()
+    '''
+    with open(filename, 'rb') as outfile:
+        node_client_sock.sendfile(outfile)
+    '''
+    node_client_sock.shutdown(socket.SHUT_WR)
+    node_client_sock.close()
 
 # each file is stored as the value in a key,value pair at the destined node
 # temporary file naming convention is "filen.txt", where n = file number, 0,1,2..
@@ -163,7 +180,13 @@ class Node():
 
 
     def create(self):
+        if self.active:
+            return False
+
         self.active = True
+        # disable create, join button
+        # enable put, get buttons
+
         print(f"This node {self.name} created a network.")
         # all fingers should point to myself
         self.predecessor = (self.id, self.name) # none
@@ -176,7 +199,13 @@ class Node():
     
     # Chord efficiently adapts as a node joins/leaves the system
     def join(self, joiner_name): # bootstrap, update other's finger_tables as well        
+        if self.active:
+            return False
+
         self.active = True
+        # disable create, join button
+        # enable put, get buttons
+        
         self.lt.start()
         print(f"Joining the network using the node {joiner_name}.")
         # update routing information -- finger table, keystore
@@ -271,7 +300,7 @@ class Node():
             #self.isPredecessorActive()
             #self.isSuccessorActive() # successor lists
             #self.stabilize() #//
-            #self.fix_finger_table()
+            self.fix_finger_table()
 
     def stabilize(self):
         # ask successor about predecessor
@@ -284,6 +313,13 @@ class Node():
             self.notifySuccessor()
 
     def leave(self):
+        if not self.active:
+            return False
+
+        self.active = False
+        # enable create, join button
+        # disable put, get button
+
         print("Formally leaving the network.")
         #keys reassigned to successor, also transferred
 
@@ -295,6 +331,9 @@ class Node():
         return get_hashedName
 
     def put(self, filename):
+        if not self.active:
+            return False
+
         if filename == "": # empty string for filename
             return False
 
@@ -322,6 +361,9 @@ class Node():
         return obtained_filePack[1]
 
     def get(self, filename):
+        if not self.active:
+            return False
+
         if filename == "":
             return False
 
@@ -422,12 +464,19 @@ class Node():
             #print("Updating to a new predecessor: ", self.predecessor)
             
         elif pargs[0] == "@PUT":
-            obtained_filePack = pickle.loads(pargs[1].encode())
-            filename = obtained_filePack[0]
+            print(pargs)
+            filename = pargs[1]
             self.keystore[stringHasher(filename)] = filename # added entry to keystore
-            fileHandler = open(filename, "w")
-            fileHandler.write(obtained_filePack[1])
-            fileHandler.close()
+            chunk_size = 128 # 1024
+            with open(filename, 'wb') as outfile:
+                print ('file opened')
+                while True:
+                    print('receiving data...')
+                    chunk = client_sock.recv(chunk_size)
+                    print('data=%s', (chunk))
+                    if not chunk:
+                        break
+                outfile.write(chunk)
 
         elif pargs[0] == "@GET":
             f_id = int(pargs[1])
@@ -448,33 +497,66 @@ def main(argv):
     #script for every node, main thing, whenever a node script is run, it goes online, connects to the network
     # use gethostbyname for IP later
     new_node = Node(host_ip, port) # listening starts right inside the constructor
+    '''
+    root = tk.Tk() # create window
+    root.geometry('300x300') # dimensions
+    root.title("21100130-DC++")
+    root.resizable(False, True) # not resizable now both vertically and horizontally
+
+    detailFrame = tk.Frame(root) # frame widget on root window
+    detail_label = tk.Label(detailFrame, text="DETAIL HERE") # Label - text widget, pack method tells where to put the widget    
     
+    btnFrame = tk.Frame(root) # frame widget on root window
+    #tk.widget_name(root_window, properties/configuration e.g. text for label widget)
+    output_label = tk.Label(btnFrame, text="OUTPUT HERE") # Label - text widget, pack method tells where to put the widget    
+    create_btn = tk.Button(btnFrame, text="Create", command=new_node.create()) # Button widget created on root window
+    join_btn = tk.Button(btnFrame, text="Join") 
+    leave_btn = tk.Button(btnFrame, text="Leave", state="disabled")
+    put_btn = tk.Button(btnFrame, text="Put", state="disabled")
+    get_btn = tk.Button(btnFrame, text="Get", state="disabled")
+    # frame can be repositioned, so moving the UI widgets together is possible
+    
+    # pack, place, grid
+    detailFrame.pack()
+    detail_label.pack()
+    #btnFrame.pack()
+    btnFrame.place(bordermode=OUTSIDE, height=200, width=200, y=100, x=50)
+    output_label.pack()
+    create_btn.pack()
+    join_btn.pack()
+    leave_btn.pack()
+    put_btn.pack()
+    get_btn.pack()
+    
+    root.mainloop() # make sure the window stays
+    '''
     while(True):
         userin = input(">> ").split(" ")
-        if (userin[0] == "create" and not new_node.getActive()):
+        if userin[0] == "create":
             new_node.create()
-        elif (userin[0] == "join" and not new_node.getActive()):
+        elif userin[0] == "join":
             if not new_node.join("127.0.0.1:"+str(userin[1])):
                 print("Failed to join the network.")
-        elif (userin == "leave" and new_node.getActive()):
+        elif userin == "leave":
             new_node.leave()
-        elif (userin[0] == "msg"):
+        elif userin[0] == "msg":
             send_node_msg(userin[1], input("Enter message here: "))
-        elif(userin[0] == "checkactive"):
+        elif userin[0] == "checkactive":
             if new_node.checkNodeActive(userin[1]):
                 print("That node is active.")
             else:
                 print("Not active.")
-        elif (userin[0] == "print"):
+        elif userin[0] == "print":
             new_node.printInfo()
-        elif (userin[0] == "cls"):
+        elif userin[0] == "cls":
             os.system('clear')
-        elif (userin[0] == "put" and new_node.getActive()):
+        elif userin[0] == "put":
             new_node.put(userin[1])
-        elif (userin[0] == "get" and new_node.getActive()):
+        elif userin[0] == "get":
             new_node.get(userin[1])
-        elif (userin[0] == "finds"):
+        elif userin[0] == "finds":
             print("Found successor:",new_node.find_successor(int(userin[1])))
+
 
 if __name__ == '__main__':
     main(sys.argv[1:])
