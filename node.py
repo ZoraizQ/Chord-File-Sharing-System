@@ -18,6 +18,7 @@ isStabilizing = False
 def send_packet(c_sock, packet):
     packet = str(len(packet)) + "%" + packet
     c_sock.sendall(packet.encode('utf-8')) # send list of body list strings in string form, encoded to bytestring
+# just changed to send, careful!
 
 def recv_packet(c_sock):
     testdata = c_sock.recv(1)
@@ -69,10 +70,16 @@ def send_and_get_response(name, packet):
 
     return response
 
-def send_node_key(nodename, filename):
+def send_node_key(nodename, filename): # remember filename can be filepath here
     print(f"Uploading {filename} to node {nodename}")
     try:
-        packet = "@PUT," + filename
+        file_size = os.path.getsize(filename)
+        if file_size == 0:
+            print("Empty file.")
+            return
+
+        print(f"File size: {file_size}")
+        packet = "@PUT," + filename + "," + str(file_size)
         server_ip, server_portstr = nodename.split(':')
         server_port = int(server_portstr)
         node_client_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -80,7 +87,11 @@ def send_node_key(nodename, filename):
         send_packet(node_client_sock, packet)
         
         with open(filename, 'rb') as outfile:
-           node_client_sock.sendfile(outfile)
+           bytes_sent = node_client_sock.sendfile(outfile)
+
+        print(f"Bytes sent: {bytes_sent}")
+        if bytes_sent == file_size:
+            print("File sending completed successfully.")
 
     except socket.error:
         node_client_sock.shutdown(socket.SHUT_WR)
@@ -89,15 +100,15 @@ def send_node_key(nodename, filename):
     
     node_client_sock.shutdown(socket.SHUT_WR)
     node_client_sock.close()
+    return True
 
 # each file is stored as the value in a key,value pair at the destined node
 # temporary file naming convention is "filen.txt", where n = file number, 0,1,2..
 # used for hashing both node names and file names    
 def stringHasher(s):
-    s_hash = hashlib.sha1(s.encode()) # encoding string to bytes
-    key = int(s_hash.hexdigest(),16) % keyspace # converting hexadecimal digest to decimal then taking % with keyspace to only keep max hash value then loop around ring
+    # encoding string to bytes, converting hexadecimal digest to decimal then taking % with keyspace to only keep max hash value then loop around ring
     # for compression across the ring, extra bits leading from m are truncated (converting to leading 0s actually)
-    return key # m bit unsigned integer (only m bits are significant leftmost)
+    return int(hashlib.sha1(s.encode()).hexdigest(),16) % keyspace # m bit unsigned integer (only m bits are significant leftmost)
 
 # there must be a Node class, of which an instance is created in the main
 class Node():
@@ -114,6 +125,7 @@ class Node():
         self.successor_list = []
         # every node itself also participates as a key store
         self.keystore = {} # key, file_name pairs for every file stored at this node
+        self.files_info = {} # dictionary containing dictionaries, more info about files here
         self.finger_table = [] # for every node there will be a finger table as a list of successors
         # first finger = node itself, second finger = immediate successor (self.id+1) # finger_table[1]
         for i in range(m): # m entries, i between 0 to m
@@ -156,7 +168,7 @@ class Node():
             if fwd_name == self.name: # if forwarding node is same as this node, to prevent infinite recursion, forward query to successor
                 fwd_name = self.successor[1] # my successor, try predecessor too
             
-            # move query towards fwd name, cannot be handled by this node
+            #move query towards fwd name, cannot be handled by this node
             #print("Forwarding to", fwd_name)
             returned_successor = send_and_get_response(fwd_name, "@FINDS,"+str(key))
             #print("Returned successor", returned_successor)
@@ -282,7 +294,7 @@ class Node():
         if not self.checkNodeActive(self.predecessor[1]): # if not alive
             if (self.predecessor[1] == self.successor[1]): # there was only 1 other node, both successor and pred
                 # then loop back successor to self
-                self.setSuccessor(self.successor)
+                self.setSuccessor(self.successor[1])
             self.predecessor = (-1, "") # none predecessor
             return False
         return True
@@ -397,7 +409,6 @@ class Node():
         self.st = threading.Thread(target=self.stabilizer) # stabilizer's thread recreated
 
     #can answer queries even if the system is changing constantly
-        
 
     def get_hashedName(self):
         # take hash of the given name
@@ -419,33 +430,40 @@ class Node():
 
         # parameter for who to recv from
         # file will be recieved as text string and stored as .txt
-        send_node_key(file_successor_name, filename)
-        return True
+        return send_node_key(file_successor_name, filename)
    
-    def get_node_key(self, nodename, filename, f_offset):
+    def get_node_key(self, nodename, filename):
         f_id = stringHasher(filename)
-        packet = "@GET,"+str(f_id)+','+str(f_offset)
+        
+        if f_id in self.keystore and self.getFileStatus(filename) == "Complete": # then must also exist in files_info
+            print("The file is completely downloaded as well.")
+            return False
+        
+        packet = "@GET,"+str(f_id)
         server_ip, server_portstr = nodename.split(':')
         server_port = int(server_portstr)
         try:
             node_client_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            node_client_sock.connect((server_ip, server_port))  # TCP - from the client side, we CONNECT to the given host and port
+            node_client_sock.connect((server_ip, server_port))
             send_packet(node_client_sock, packet)
-
             chunk_size = 128 # 1024
-            with open("recvdbyget"+filename, 'wb') as outfile:
+            with open(filename, 'wb') as outfile:
                 while True:
                     chunk = node_client_sock.recv(chunk_size)
-                    #print(chunk)
                     if not chunk:
                         break
                     outfile.write(chunk)
-        except socket.error: # comment
+        except socket.error:
             node_client_sock.shutdown(SHUT_WR)
             node_client_sock.close()
 
+
+        #file_size = int(recv_packet(node_client_sock))
+        #print(f"File size: {file_size}")    
         self.keystore[f_id] = filename # added entry to keystore
-        print(f"Got {filename}")
+        current_file_size = os.path.getsize(filename)
+        print(current_file_size)
+        self.setFileInfo(filename, 27, current_file_size)
 
     def get(self, filename):
         if not self.active:
@@ -461,8 +479,7 @@ class Node():
 
         file_successor_name = self.find_successor(f_id)
 
-        self.get_node_key(file_successor_name, filename, 0)
-        return True
+        return self.get_node_key(file_successor_name, filename)
 
     def printInfo(self):
         print(f"NODE {self.id}:")
@@ -471,6 +488,7 @@ class Node():
         print(f"PREDECESSOR: {self.predecessor}")
         print("FINGER TABLE:", self.finger_table)
         print("KEY STORE:", self.keystore)
+        print("FILES INFO:", self.files_info)
 
     def listener(self):
         # thread locks
@@ -549,44 +567,107 @@ class Node():
             #print("Updating to a new predecessor: ", self.predecessor)
             
         elif pargs[0] == "@PUT":
-            print(pargs)
             filename = pargs[1]
-            #total_chunks = pargs[2]
+            print(f"Downloading {filename}")
+            file_size = int(pargs[2])
             f_id = stringHasher(filename)
+            
+            # file must be atleast 8 bytes
             self.keystore[f_id] = filename # added entry to keystore
             chunk_size = 128 # 1024
-            with open("recvd"+filename, 'wb') as outfile:
-                while True:
-                    chunk = client_sock.recv(chunk_size)
-                    #print(chunk)
-                    if not chunk:
-                        break
-                    outfile.write(chunk)
-
-        elif pargs[0] == "@GET":
-            print(pargs)
-            f_id = int(pargs[1])
-            f_offset = int(pargs[2])
-            filename = self.keystore[f_id]
             try:
+                with open(filename, 'wb') as outfile:
+                    while True:
+                        chunk = client_sock.recv(chunk_size)
+                        if not chunk:
+                            break
+                        outfile.write(chunk)
+            except socket.error:
+                client_sock.shutdown(socket.SHUT_WR)
+                client_sock.close()
+
+            current_file_size = os.path.getsize(filename)
+            self.setFileInfo(filename, file_size, current_file_size)
+            
+        elif pargs[0] == "@GET":
+            f_id = int(pargs[1])
+            filename = self.keystore[f_id]
+            print(f"Sending {filename} to {client_addr}")
+            try:
+                file_size = self.files_info[filename]["size"]
                 with open(filename, 'rb') as outfile:
-                    client_sock.sendfile(outfile, offset=f_offset, count=None)
-                    '''
-                    Send a file until EOF is reached by using high-performance os.sendfile and
-                    return the total number of bytes which were sent. file must be a regular file object 
-                    opened in binary mode. If os.sendfile is not available (e.g. Windows) or file is not
-                    a regular file send() will be used instead. offset tells from where to start reading the file.
-                    If specified, count is the total number of bytes to transmit as opposed to sending the 
-                    file until EOF is reached. File position is updated on return or also in case of error 
-                    in which case file.tell() can be used to figure out the number of bytes which were sent. 
-                    The socket must be of SOCK_STREAM type. Non-blocking sockets are not supported.
-                    '''
+                    bytes_sent = client_sock.sendfile(outfile)
+
+            except socket.error:
+                client_sock.shutdown(socket.SHUT_WR)
+                client_sock.close()
+            
+            #abcdefghijklmnopqrstuvwxyz
+            #print(f"File size: {file_size}")
+            #send_packet(client_sock, str(file_size))
+            print(f"Bytes sent: {bytes_sent}")
+            if bytes_sent == file_size:
+                print("File sending completed successfully.")
+            else:
+                print("Incomplete send executed.")
+
+        elif pargs[0] == "@PARTGET":
+            f_id = int(pargs[1])
+            filename = self.keystore[f_id]
+            bytes_offset = int(pargs[2])
+            print(f"Uploading {filename} to node {client_addr} resuming from bytes {bytes_offset}")
+            try:
+                # assuming the recieving end has the file size
+                with open(filename, 'rb') as outfile:
+                   bytes_sent = client_sock.sendfile(outfile, offset=bytes_offset)
+
             except socket.error:
                 client_sock.shutdown(socket.SHUT_WR)
                 client_sock.close()
 
         client_sock.close()
         return True    
+
+    def getFileStatus(self, filename):
+        if filename in self.files_info:
+            return self.files_info[filename]["status"]
+        else:
+            return ""
+
+    def setFileInfo(self, filename, file_size, bytes_recv):
+        self.files_info[filename] = {"status":"","size":file_size,"recieved":bytes_recv}
+        if bytes_recv >= file_size:
+            # if bytes_recv > file_size:
+            #     self.files_info[filename]["recieved"] = file_size
+            print("The whole file was recieved successfully.")
+            self.files_info[filename]["status"] = "Complete" # status determined automatically
+        else:
+            print(f"The file was left incomplete.")
+            self.files_info[filename]["status"] = "Incomplete"
+
+    def finishAllDownloads(self):
+        for filename in self.files_info:
+            if self.getFileStatus(filename) == "Incomplete":
+                f_id = stringHasher(filename)
+                nodename = self.find_successor(f_id)
+                packet = "@PARTGET,"+str(f_id)+","+str(self.files_info[filename]["recieved"])
+                server_ip, server_portstr = nodename.split(':')
+                server_port = int(server_portstr)
+                node_client_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                node_client_sock.connect((server_ip, server_port))  # TCP - from the client side, we CONNECT to the given host and port
+                send_packet(node_client_sock, packet)
+
+                # request partial/remaining file again
+                chunk_size = 128 # 1024
+                with open(filename, 'ab') as outfile: # for append
+                    while True:
+                        chunk = node_client_sock.recv(chunk_size)
+                        if not chunk:
+                            break
+                        outfile.write(chunk)
+
+                current_file_size = os.path.getsize(filename)
+                self.setFileInfo(filename, self.files_info[filename]["size"], current_file_size)
 
 
 def main(argv):
@@ -656,6 +737,8 @@ def main(argv):
             print("Found successor:", stringHasher(new_node.find_successor(int(userin[1]))))
         elif userin[0] == "checkin":
             print(in_set(userin[1], userin[2], userin[3]))
+        elif userin[0] == "fad":
+            new_node.finishAllDownloads()
 
 if __name__ == '__main__':
     main(sys.argv[1:])
