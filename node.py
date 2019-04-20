@@ -277,7 +277,7 @@ class Node():
         if not self.checkNodeActive(self.predecessor[1]): # if not alive
             if (self.predecessor[1] == self.successor[1]): # there was only 1 other node, both successor and pred
                 # then loop back successor to self
-                self.setSuccessor(self.name)
+                self.setSuccessor(self.successor)
             self.predecessor = (-1, "") # none predecessor
             return False
         return True
@@ -321,17 +321,14 @@ class Node():
             
     def stabilize(self):
         # ask successor about predecessor
-        if self.predecessor[1] != self.name: 
-            successor_pred_x = send_and_get_response(self.successor[1], "@GIVE_P")
-            # verifies if my immediate successor is consistent (no node x has come in between us, if it has that x is our successor)
-            if successor_pred_x != "":
-                successor_pred_x_id = stringHasher(successor_pred_x)
-                if self.successor[1] == self.name:
-                    self.setSuccessor(successor_pred_x) 
-                elif (successor_pred_x_id > self.id and successor_pred_x_id < self.successor[0]):
-                    self.setSuccessor(successor_pred_x)
-                elif (successor_pred_x_id < self.id or successor_pred_x_id > self.successor[0]):
-                    self.setSuccessor(successor_pred_x)
+        successor_pred_x = send_and_get_response(self.successor[1], "@GIVE_P")
+        # verifies if my immediate successor is consistent (no node x has come in between us, if it has that x is our successor)
+        if successor_pred_x != "":
+            x = stringHasher(successor_pred_x)
+            if x > self.id and x < self.successor[0]:
+                self.setSuccessor(successor_pred_x)
+            if x > self.id or (x < self.id and x < self.successor[0]):
+                self.setSuccessor(successor_pred_x)
         self.notifySuccessor()
 
     def leave(self):
