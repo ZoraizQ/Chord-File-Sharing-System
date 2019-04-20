@@ -30,6 +30,12 @@ def recv_packet(c_sock):
     packet = c_sock.recv(packet_size).decode('utf-8')
     return packet
 
+# for the set notation n IN (id, successor] etc. with wrap around
+def in_set(between, left, right):
+    if left < right:
+        return (left < between and between < right)
+    else:
+        return (between < right or between > left)
 
 def send_node_msg(name, packet):
     server_ip, server_portstr = name.split(':')
@@ -105,12 +111,15 @@ class Node():
         self.predecessor = (-1,"") # not yet assigned
         # we already know the successor is in finger_table[1]
         self.successor = (-1,"") # not yet assigned
+        self.successor_list = []
         # every node itself also participates as a key store
         self.keystore = {} # key, file_name pairs for every file stored at this node
         self.finger_table = [] # for every node there will be a finger table as a list of successors
         # first finger = node itself, second finger = immediate successor (self.id+1) # finger_table[1]
         for i in range(m): # m entries, i between 0 to m
             self.finger_table.append([]) 
+        for i in range(10): # 10 successors
+            self.successor_list.append([]) 
         self.node_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         try:
             self.node_sock.bind((given_ip, given_port))
@@ -120,61 +129,51 @@ class Node():
         self.lt = threading.Thread(target=self.listener) # listener's thread created
         self.st = threading.Thread(target=self.stabilizer) # stabilizer's thread created 
 
-
-    def find_successor(self, _id):
+    def find_successor(self, key):
         # go back then check one step forward, if not ==, then go back more
         #1. find immediate predecessor node of desired id
         #2. successor of that node == id, return its name
-        #print(f"Calculating successor for id {_id}")
+        #print(f"Calculating successor for id {key}")
         successor_id = self.successor[0]
-        if (_id <= successor_id and _id > self.id): # is my successor the owner of the id, check range
-            return self.successor[1]
-        elif self.id == successor_id: # is my id == my successor's (only node present) 
+        # key in set (self.id, successor_id]
+        if key == self.id:
             return self.name
-        elif _id == self.id: # is the id == my id,  when == as well this node successor to the id
-            return self.name 
+        elif key == successor_id or in_set(key, self.id, successor_id):
+            return self.successor[1]
         elif successor_id == self.predecessor[0]: # only one other node
             if self.id > successor_id: # if my successor is < than my id
-                if (_id > self.id and _id > successor_id) or (_id < self.id and _id < successor_id):
+                if (key > self.id and key > successor_id) or (key < self.id and key < successor_id):
                     return self.successor[1]
                 else:
                     return self.name
-            elif successor_id > self.id and (self.id < _id and _id <= successor_id): # if my successor is greater than my id
+            elif successor_id > self.id and (self.id < key and key <= successor_id): # if my successor is greater than my id
                 return self.successor[1]
             else:
                 return self.name
         else:
-            fwd_name = self.find_closest_preceding_node(_id)  # forward request to node B, preceding node (largest hash, smaller than k)
+            fwd_name = self.find_closest_preceding_node(key)  # forward request to node B, preceding node (largest hash, smaller than k)
             #print(f"Closest preceding node {fwd_name}")
-            if (fwd_name == self.name): # if forwarding node is same as this node, to prevent infinite recursion, forward query to successor
-                return self.successor[1] # my successor
-            elif (fwd_name == ""): # could not find preceding node for this id, forward this query to the successor
-                fwd_name = self.successor[1]
+            if fwd_name == self.name: # if forwarding node is same as this node, to prevent infinite recursion, forward query to successor
+                fwd_name = self.successor[1] # my successor, try predecessor too
+            
             # move query towards fwd name, cannot be handled by this node
             #print("Forwarding to", fwd_name)
-            returned_successor = send_and_get_response(fwd_name, "@FINDS,"+str(_id))
+            returned_successor = send_and_get_response(fwd_name, "@FINDS,"+str(key))
             #print("Returned successor", returned_successor)
             return returned_successor
 
 
-    def find_closest_preceding_node(self, _id):
+    def find_closest_preceding_node(self, key):
         # finds a node n' such that the id falls between n' and the successor of n, then
         # find entry in finger table that closest and preferrably < id
         # Finding the largest hash smaller than the hash k
-        pred_index = 0
-        currFingerID = self.finger_table[0][0]
-        mingap = abs(_id-currFingerID)
-        for i in range(1, m-1):
+        i = m-1
+        while (i >= 0):
             currFingerID = self.finger_table[i][0]
-            currGap = abs(_id-currFingerID)
-            if currGap < mingap and currFingerID <= _id:
-                mingap = currGap
-                pred_index = i
-
-        if _id < self.finger_table[pred_index][0]:
-            return ""
-        else:
-            return self.finger_table[pred_index][1]
+            if in_set(currFingerID, self.id, key):
+                return self.finger_table[1][1]
+            i -= 1
+        return self.name
 
     def get_id(self):
         return self.id
@@ -192,6 +191,8 @@ class Node():
         # all fingers should point to myself
         self.predecessor = (-1, "") # none
         self.successor = (self.id, self.name) # itself
+        for i in range(len(self.successor_list)):
+            self.successor_list[i] = [self.id, self.name]
         for i in range(len(self.finger_table)): # 1 to m, replace the node itself on all entries
             self.finger_table[i] = [self.id, self.name]
 
@@ -228,7 +229,11 @@ class Node():
             for i in range(len(self.finger_table)): # 1 to m, replace the node itself on all entries
                 self.finger_table[i] = [self.successor[0], self.successor[1]]
         
-        # if some of my keys belong to the new joiner, send them to him 
+        # initialise successor list to only successor
+        for i in range(len(self.successor_list)):
+            self.successor_list[i] = [self.successor[0], self.successor[1]]
+        
+        # if some of my keys belong to the new joiner, send them to him     
         for key in self.keystore: 
             if self.find_successor(key) == joiner_name:
                 send_node_key(joiner_name, self.keystore[key])
@@ -282,6 +287,17 @@ class Node():
             return False
         return True
 
+    def fix_successor_list(self):
+        slist = self.getSuccessorListFromNode(self.successor[1]);
+
+        successor_list[1] = [self.successor[0], self.successor[1]];
+        '''
+        for i in range(2, 10):
+        for(int i=2;i<=R;i++){
+            successorList[i].first.first = list[i-2].first;
+            successorList[i].first.second = list[i-2].second;
+            successorList[i].second = help.getHash(list[i-2].first + ":" + to_string(list[i-2].second));
+        '''
     def isSuccessorActive(self):
         if self.successor[1] == "":
             return False
@@ -315,21 +331,20 @@ class Node():
             #print("Stabilizing...")
             #self.isSuccessorActive() # successor lists
             self.isPredecessorActive()
-            self.stabilize() #ruins my successor
             self.fix_finger_table()
+            self.stabilize() #ruins my successor
         print("Shutting down stabilization.")
             
     def stabilize(self):
         # ask successor about predecessor
-        successor_pred_x = send_and_get_response(self.successor[1], "@GIVE_P")
-        # verifies if my immediate successor is consistent (no node x has come in between us, if it has that x is our successor)
-        if successor_pred_x != "":
-            x = stringHasher(successor_pred_x)
-            if x > self.id and x < self.successor[0]:
-                self.setSuccessor(successor_pred_x)
-            if x > self.id or (x < self.id and x < self.successor[0]):
-                self.setSuccessor(successor_pred_x)
-        self.notifySuccessor()
+        if self.successor[1] != "":
+            successor_pred_x = send_and_get_response(self.successor[1], "@GIVE_P")
+            # verifies if my immediate successor is consistent (no node x has come in between us, if it has that x is our successor)
+            if successor_pred_x != "":
+                x = stringHasher(successor_pred_x)
+                if in_set(x, self.id, self.successor[0]):
+                    self.setSuccessor(successor_pred_x)
+            self.notifySuccessor()
 
     def leave(self):
         if not self.active:
@@ -497,8 +512,9 @@ class Node():
             send_packet(client_sock, self.find_successor(sender_id))
         
         elif pargs[0] == "@FINDS": # find successor query
-            #print(f"Find query recieved.")
-            send_packet(client_sock, self.find_successor(int(pargs[1])))
+            #print(f"Find query recieved.",pargs)
+            their_successor = self.find_successor(int(pargs[1]))
+            send_packet(client_sock, their_successor)
 
         # the node that said hi thinks he might be our predecessor
         elif pargs[0] == "@HI_S_GIVE_P": # notify
@@ -508,21 +524,13 @@ class Node():
             new_pred_id = stringHasher(new_pred_name)
 
             isCorrect = False # assumption to think they are my predecessor is false initially
-            updateSucc = True
             if old_pred_name == "":
                 self.setPredecessor(new_pred_name)
                 isCorrect = False
-            elif old_pred_name == self.name:
-                updateSucc = True
+            elif old_pred_name == self.name or in_set(new_pred_id, old_pred_id, self.id):
                 isCorrect = True
-            elif old_pred_id < self.id and (new_pred_id < self.id and new_pred_id > old_pred_id):
-                isCorrect = True
-            elif old_pred_id > self.id and (new_pred_id < self.id or new_pred_id > old_pred_id):
-                isCorrect = True
-            #print(isCorrect)
+            
             if isCorrect:
-                #if updateSucc:
-                #    send_node_msg(old_pred_name, "@UPDATE_S,"+new_pred_name) # tell old predecessor to update their successor to this node's new predecessor
                 send_packet(client_sock, old_pred_name) # respond to new predecessor to update their predecessor to this node's old predecessor
                 self.setPredecessor(new_pred_name)
             else:
@@ -556,6 +564,7 @@ class Node():
                     outfile.write(chunk)
 
         elif pargs[0] == "@GET":
+            print(pargs)
             f_id = int(pargs[1])
             f_offset = int(pargs[2])
             filename = self.keystore[f_id]
@@ -644,8 +653,9 @@ def main(argv):
         elif userin[0] == "get":
             new_node.get(userin[1])
         elif userin[0] == "finds":
-            print("Found successor:",new_node.find_successor(int(userin[1])))
-
+            print("Found successor:", stringHasher(new_node.find_successor(int(userin[1]))))
+        elif userin[0] == "checkin":
+            print(in_set(userin[1], userin[2], userin[3]))
 
 if __name__ == '__main__':
     main(sys.argv[1:])
