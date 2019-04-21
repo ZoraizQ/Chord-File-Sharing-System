@@ -22,14 +22,22 @@ def send_packet(c_sock, packet):
 # just changed to send, careful!
 
 def recv_packet(c_sock):
-    testdata = c_sock.recv(1)
-    if not testdata:
-        return ""
-    packet_size = testdata.decode('utf-8') # pick the first 1 byte (normal size of chars)
-    while "%" not in packet_size:
-        packet_size += c_sock.recv(1).decode('utf-8') # recieve 1 byte every time
-    packet_size = int(packet_size[:-1])
-    packet = c_sock.recv(packet_size).decode('utf-8')
+    try:
+        testdata = c_sock.recv(1)
+        if not testdata:
+            return ""
+        ps = testdata.decode('utf-8') # pick the first 1 byte (normal size of chars)
+        while "%" not in ps:
+            ps += c_sock.recv(2).decode('utf-8') # recieve 1 byte every time
+        
+        pslist = ps.split("%")
+        packet_size = int(pslist[0])
+        packet = pslist[1] # packet fragment that came with the %
+        packet += c_sock.recv(packet_size).decode('utf-8')
+    except socket.error:
+        c_sock.shutdown(socket.SHUT_WR)
+        c_sock.close()
+
     return packet
 
 # for the set notation n IN (id, successor] etc. with wrap around
@@ -142,8 +150,10 @@ class Node():
             print("Unable to bind again, may already be in use.")
             quit()
         self.lt = threading.Thread(target=self.listener) # listener's thread created
+        self.lt.daemon = True # prevent thread from running after program terminated
         self.st = threading.Thread(target=self.stabilizer) # stabilizer's thread created 
-
+        self.st.daemon = True # prevent thread from running after program terminated
+    
     def find_successor(self, key):
         # go back then check one step forward, if not ==, then go back more
         #1. find immediate predecessor node of desired id
@@ -351,6 +361,19 @@ class Node():
             self.finger_table[i] = [stringHasher(entry_name), entry_name] 
         return True
 
+    def fix_finger_table2(self):
+        i = randint(1, m-1) # [1 to m-1] choose any finger to fix
+        #every entry is the successor_of ((self.id+2**i)%keyspace)
+        curr_id = (self.id + 2**i) % keyspace
+        #print("Fixing for finger i ",curr_id)
+        entry_name = self.find_successor(curr_id)
+        if entry_name == "": # successor not found
+            return False
+        #time.sleep(0.5)
+        #print("Entry name",entry_name)
+        self.finger_table[i] = [stringHasher(entry_name), entry_name] 
+        return True
+
     def stabilizer(self):
         global isStabilizing
         stabilizedTimes = 0
@@ -361,7 +384,8 @@ class Node():
                 self.finishAllDownloads()
             self.isSuccessorActive() # successor lists
             self.isPredecessorActive()
-            self.fix_finger_table()
+            self.fix_finger_table() # refresh entire table, stop until alive node found
+            #self.fix_finger_table2() # refresh random finger
             self.stabilize()
         print("Shutting down stabilization.")
             
@@ -408,7 +432,7 @@ class Node():
             self.finger_table.append([]) #renew
 
         self.successor_list.clear() # clear successor list
-        for i in range(10):
+        for i in range(self.r):
             self.successor_list.append([]) #renew
 
         print("Formally leaving the network.")
@@ -536,10 +560,16 @@ class Node():
         # thread locks
         global isListening
         while isListening:
-            self.node_sock.listen(10) # server will not start listening also until this parameter has been given
+            self.node_sock.listen(5) # server will not start listening also until this parameter has been given
             if isListening == False:
                 break
-            client_sock, client_addr = self.node_sock.accept()
+
+            try:
+                client_sock, client_addr = self.node_sock.accept()
+            except os.error:
+                print("Lots of threads open, leaving.")
+                self.leave()
+                quit()            
             #print("Connection from %s" % str(client_addr))
 
             t = threading.Thread(target=self.taskHandler, args=(client_sock, client_addr,))
@@ -556,10 +586,8 @@ class Node():
             packet = recv_packet(client_sock) # client's socket recieves data from the server script running on the server it connected to
             if packet == "":
                 return False
-        except socket.error:
+        except os.error:
             print("Failed to recieve packet.")
-            client_sock.shutdown(2)
-            client_sock.close()
             return False
         
         pargs = packet.split(',') # list of arguments obtained from packet
@@ -613,6 +641,7 @@ class Node():
             #print("Updating to a new predecessor: ", self.predecessor)
             
         elif task == "@P": #@PUT
+            print(pargs)
             filename = pargs[1]
             print(f"Downloading {filename}")
             file_size = int(pargs[2])
@@ -721,15 +750,26 @@ class Node():
 
                 # request partial/remaining file again
                 chunk_size = 128 # 1024
+                current_file_size = os.path.getsize(filename)
+                actual_file_size = self.files_info[filename]["size"]
                 with open(filename, 'ab') as outfile: # for append
                     while True:
                         chunk = node_client_sock.recv(chunk_size)
                         if not chunk:
                             break
-                        outfile.write(chunk)
+                        if current_file_size != actual_file_size:
+                            outfile.write(chunk)
 
                 current_file_size = os.path.getsize(filename)
-                self.setFileInfo(filename, self.files_info[filename]["size"], current_file_size)
+                self.setFileInfo(filename, actual_file_size, current_file_size)
+
+    def replicateCompletedFiles(self):
+        for filename in self.files_info:
+            print("Replicating completed downloads to successors.")
+            if self.getFileStatus(filename) == "Complete":
+                for successor in self.successor_list: # for every successor in successor list
+                    if self.checkNodeActive(successor[1]): # if successor is alive
+                        self.send_node_key(successor[1], filename) # send the successor the file as a put request
 
 def main(argv):
     host_ip, port = argv[0], int(argv[1]) # use all available IP addresses (both localhost and any public addresses configured)
@@ -749,7 +789,7 @@ def main(argv):
             new_node.leave()
         elif userin[0] == "checkactive":
             if new_node.checkNodeActive(userin[1]):
-                print(colored("Failed to join the network.", "green"))
+                print(colored("Active.", "green"))
             else:
                 print("Not active.")
         elif userin[0] == "p": # print
@@ -766,6 +806,8 @@ def main(argv):
             new_node.finishAllDownloads()
         elif userin[0] == "findkeynode":
             print(colored(new_node.find_file_node(userin[1]), "green"))
+        elif userin[0] == "replicate":
+            new_node.replicateCompletedFiles()
 
 if __name__ == '__main__':
     main(sys.argv[1:])
