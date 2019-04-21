@@ -121,6 +121,7 @@ class Node():
         self.port = given_port
         self.name = self.ip+':'+str(self.port) # distinct name
         self.id = stringHasher(self.name) # hash this name
+        print(self.id)
         self.active = False
         self.predecessor = (-1,"") # not yet assigned
         # we already know the successor is in finger_table[1]
@@ -790,118 +791,44 @@ class Node():
                         if self.checkNodeActive(successor[1]): # if successor is alive
                             send_node_key(successor[1], filename) # send the successor the file as a put request
 
-def configureOutputLabel1(message):
-    output_label1.configure(text=message)
+def main(argv):
+    host_ip, port = argv[0], int(argv[1]) # use all available IP addresses (both localhost and any public addresses configured)
+    #script for every node, main thing, whenever a node script is run, it goes online, connects to the network
+    # use gethostbyname for IP later
+    new_node = Node(host_ip, port) # listening starts right inside the constructor
+    print(colored("Instructions:","red"))
+    print("Create a network = c\nJoin a network = j IP:Port\nPrint Info = p\nLeave = l\nUpload a file = upload filename\nDownload a file = download filename\nClear screen = cls")
 
-def callCreate():
-    new_node.create()
-    create_btn.configure(state=DISABLED)
-    join_btn.configure(state=DISABLED)
-    leave_btn.configure(state=NORMAL)
-    put_btn.configure(state=NORMAL)
-    get_btn.configure(state=NORMAL)
+    while(True):
+        userin = input(">> ").split(" ")
+        if userin[0] == "c": # create
+            new_node.create()
+        elif userin[0] == "j": # join
+            if not new_node.join("127.0.0.1:"+str(userin[1])):
+                print(colored("Failed to join the network.", "white"))
+        elif userin[0] == "l":
+            new_node.leave()
+        elif userin[0] == "checkactive":
+            if new_node.checkNodeActive(userin[1]):
+                print(colored("Active.", "green"))
+            else:
+                print("Not active.")
+        elif userin[0] == "p": # print
+            new_node.printInfo()
+        elif userin[0] == "cls":
+            os.system('clear')
+        elif userin[0] == "upload":
+            new_node.put(userin[1])
+        elif userin[0] == "download":
+            new_node.get(userin[1])
+        elif userin[0] == "finds":
+            print(colored("Found successor:", "green"), stringHasher(new_node.find_successor(int(userin[1]))))
+        elif userin[0] == "fad":
+            new_node.finishAllDownloads()
+        elif userin[0] == "findkeynode":
+            print(colored(new_node.find_file_node(userin[1]), "green"))
+        elif userin[0] == "replicate":
+            new_node.replicateCompletedFiles()
 
-def callPrint():
-    new_node.printInfo()
-
-def callLeave():
-    new_node.leave()
-    create_btn.configure(state=NORMAL)
-    join_btn.configure(state=NORMAL)
-    leave_btn.configure(state=DISABLED)
-    put_btn.configure(state=DISABLED)
-    get_btn.configure(state=DISABLED)
-
-host_ip, port = sys.argv[1], int(sys.argv[2])
-root = tk.Tk() # create window
-root.geometry('250x350') # dimensions
-root.title("21100130_DC++")
-root.resizable(False, False) # not resizable now both vertically and horizontally
-
-btnFrame = tk.Frame(root) # frame widget on root window
-#tk.widget_name(root_window, properties/configuration e.g. text for label widget)
-output_label1 = tk.Label(root, text="OUTPUT HERE") # Label - text widget, pack method tells where to put the widget    
-output_label1.pack()
-print_btn = tk.Button(root, text="Print Node Info", command=callPrint) # Button widget created on root window
-print_btn.pack()
-create_btn = tk.Button(root, text="Create a Network", command=callCreate) # Button widget created on root window
-create_btn.pack()
-detail_label = tk.Label(root, text="IP:PORT:") # Label - text widget, pack method tells where to put the widget    
-detail_label.pack()
-join_entry = Entry(root, width=20, bg="black",fg="white")
-join_entry.pack()
-
-def callJoin():
-    new_node.join(join_entry.get())
-    create_btn.configure(state=DISABLED)
-    join_btn.configure(state=DISABLED)
-    leave_btn.configure(state=NORMAL)
-    put_btn.configure(state=NORMAL)
-    get_btn.configure(state=NORMAL)
-
-join_btn = tk.Button(root, text="Join a Network", command=callJoin) 
-join_btn.pack()
-leave_btn = tk.Button(root, text="Leave",command=callLeave, state=DISABLED)
-put_label = tk.Label(root, text="FILENAME:") # Label - text widget, pack method tells where to put the widget    
-put_label.pack()
-put_entry = Entry(root, width=20, bg="black",fg="white")
-put_entry.pack()
-
-def callPut():
-    new_node.put(put_entry.get())
-
-put_btn = tk.Button(root, text="Upload File", state=DISABLED, command=callPut)
-put_btn.pack()
-get_label = tk.Label(root, text="FILENAME:") # Label - text widget, pack method tells where to put the widget    
-get_label.pack()
-get_entry = Entry(root, width=20, bg="black",fg="white")
-get_entry.pack()
-
-def callGet():
-    new_node.get(get_entry.get())
-
-get_btn = tk.Button(root, text="Download File", state=DISABLED, command=callGet)
-get_btn.pack()
-# frame can be repositioned, so moving the UI widgets together is possible
-
-#script for every node, main thing, whenever a node script is run, it goes online, connects to the network
-# use gethostbyname for IP later
-new_node = Node(host_ip, port) # listening starts right inside the constructor
-configureOutputLabel1("NODE ID: "+str(new_node.get_id()))
-#print(colored("Instructions:","red"))
-#print("Create a network = c\nJoin a network = j IP:Port\nPrint Info = p\nLeave = l\nUpload a file = upload filename\nDownload a file = download filename\nClear screen = cls")
-root.mainloop() # make sure the window stays
-'''    
-global user_input
-userin = ""
-while(True):
-    print(userin)
-    if userin[0] == "c": # create
-        new_node.create()
-    elif userin[0] == "j": # join
-        if not new_node.join("127.0.0.1:"+str(userin[1])):
-            print(colored("Failed to join the network.", "white"))
-    elif userin[0] == "l":
-        new_node.leave()
-    elif userin[0] == "checkactive":
-        if new_node.checkNodeActive(userin[1]):
-            print(colored("Active.", "green"))
-        else:
-            print("Not active.")
-    elif userin[0] == "p": # print
-        new_node.printInfo()
-    elif userin[0] == "cls":
-        os.system('clear')
-    elif userin[0] == "upload":
-        new_node.put(userin[1])
-    elif userin[0] == "download":
-        new_node.get(userin[1])
-    elif userin[0] == "finds":
-        print(colored("Found successor:", "green"), stringHasher(new_node.find_successor(int(userin[1]))))
-    elif userin[0] == "fad":
-        new_node.finishAllDownloads()
-    elif userin[0] == "findkeynode":
-        print(colored(new_node.find_file_node(userin[1]), "green"))
-    elif userin[0] == "replicate":
-        new_node.replicateCompletedFiles()
-'''
+if __name__ == '__main__':
+    main(sys.argv[1:])
