@@ -138,7 +138,6 @@ class Node():
         for i in range(self.r): # r successors
             self.successor_list.append([]) 
         self.node_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        self.node_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1) # reuse same ip:port
         try:
             self.node_sock.bind((given_ip, given_port))
         except socket.error:
@@ -440,19 +439,17 @@ class Node():
         self.lt.join()
         self.active = False
         #reassign socket and rebind
-        self.node_sock.close() #just in case
         self.node_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        self.node_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1) # reuse same ip:port
         try:
             self.node_sock.bind((self.ip, self.port))
         except socket.error:
-            ip_port = input("Unable to bind again, may already be in use. Enter new IP:PORT: ").split(":")
-            self.node_sock.bind((ip_port[0], int(ip_port[1])))
-            print("Bound successfully.")
+            print("Unable to bind again, may already be in use.")
+            quit()
 
         self.lt = threading.Thread(target=self.listener) # listener's thread recreated
         self.st = threading.Thread(target=self.stabilizer) # stabilizer's thread recreated
-        # can answer queries even if the system is changing constantly
+
+    #can answer queries even if the system is changing constantly
 
     def get_hashedName(self):
         # take hash of the given name
