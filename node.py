@@ -152,7 +152,7 @@ class Node():
             return self.name
         elif key == successor_id or in_set(key, self.id, successor_id):
             return self.successor[1]
-        elif successor_id == self.predecessor[0]: # only one other node
+        elif successor_id == self.predecessor[0]: # only one other node, this may not be needed
             if self.id > successor_id: # if my successor is < than my id
                 if (key > self.id and key > successor_id) or (key < self.id and key < successor_id):
                     return self.successor[1]
@@ -233,7 +233,7 @@ class Node():
         # update routing information -- finger table, keystore
         # certain keys previously assigned to this node’s successor now become assigned to it
         # when (n+1) node joins/leaves -> responsibility change
-        # be aware of successor
+        # become aware of successor
         self.predecessor = (-1, "")
         newsuccessor = send_and_get_response(joiner_name, "@JOIN,"+self.name)
         if newsuccessor != "":
@@ -248,6 +248,7 @@ class Node():
         # if some of my keys belong to the new joiner, send them to him     
         for key in self.keystore: 
             if self.find_successor(key) == joiner_name:
+                print(f"Sending key {key} to {joiner_name} because it belongs to him.")
                 send_node_key(joiner_name, self.keystore[key])
 
         self.st.start()
@@ -303,13 +304,10 @@ class Node():
         slist = self.getSuccessorListFromNode(self.successor[1]);
 
         successor_list[1] = [self.successor[0], self.successor[1]];
-        '''
+        
         for i in range(2, 10):
-        for(int i=2;i<=R;i++){
-            successorList[i].first.first = list[i-2].first;
-            successorList[i].first.second = list[i-2].second;
-            successorList[i].second = help.getHash(list[i-2].first + ":" + to_string(list[i-2].second));
-        '''
+            successor_list[i] = [slist[i-2][0], slist[i-2][1]]
+        
     def isSuccessorActive(self):
         if self.successor[1] == "":
             return False
@@ -340,11 +338,10 @@ class Node():
         global isStabilizing
         while isStabilizing:
             time.sleep(0.5)
-            #print("Stabilizing...")
             #self.isSuccessorActive() # successor lists
             self.isPredecessorActive()
             self.fix_finger_table()
-            self.stabilize() #ruins my successor
+            self.stabilize()
         print("Shutting down stabilization.")
             
     def stabilize(self):
@@ -389,6 +386,10 @@ class Node():
         for i in range(m): # m entries, i between 0 to m
             self.finger_table.append([]) #renew
 
+        self.successor_list.clear() # clear successor list
+        for i in range(10):
+            self.successor_list.append([]) #renew
+
         print("Formally leaving the network.")
         global isListening
         isListening = False
@@ -432,11 +433,30 @@ class Node():
         # file will be recieved as text string and stored as .txt
         return send_node_key(file_successor_name, filename)
    
+    def find_key_node(self, filename): # and add key file info to files_info
+        key = stringHasher(filename) # get f_id
+        targetNode = self.find_successor(key)
+        tries = 5 # try 5 times, else file not found
+
+        while tries >= 0:
+            response = send_and_get_response(targetNode, "@HAVEKEY?,"+str(key))
+            rargs = response.split(",")
+            if rargs[0] == "@NO":
+                targetNode = self.find_successor(stringHasher(targetNode)) # find the successor of that target node and restart process
+                # overwrote targetNode, now target is their successor
+            elif rargs[0] == "@YES":
+                self.files_info[filename] = {"status":"Incomplete","size":int(rargs[1]),"recieved":0}
+                return targetNode
+            tries -= 1
+
+        return "" # node with key not found
+
+
     def get_node_key(self, nodename, filename):
         f_id = stringHasher(filename)
-        
+
         if f_id in self.keystore and self.getFileStatus(filename) == "Complete": # then must also exist in files_info
-            print("The file is completely downloaded as well.")
+            print("The file is completely downloaded and present here. Cannot get again.")
             return False
         
         packet = "@GET,"+str(f_id)
@@ -447,23 +467,22 @@ class Node():
             node_client_sock.connect((server_ip, server_port))
             send_packet(node_client_sock, packet)
             chunk_size = 128 # 1024
-            with open(filename, 'wb') as outfile:
+            with open(filename, 'wb') as outfile: # for write
                 while True:
                     chunk = node_client_sock.recv(chunk_size)
+                    print(chunk)
                     if not chunk:
                         break
                     outfile.write(chunk)
         except socket.error:
+            print("Socket error in get.")
             node_client_sock.shutdown(SHUT_WR)
             node_client_sock.close()
 
-
-        #file_size = int(recv_packet(node_client_sock))
-        #print(f"File size: {file_size}")    
         self.keystore[f_id] = filename # added entry to keystore
         current_file_size = os.path.getsize(filename)
-        print(current_file_size)
-        self.setFileInfo(filename, 27, current_file_size)
+        # already have the original file size at the moment, so just update status with that and current file_size
+        self.setFileInfo(filename, self.files_info[filename]["size"], current_file_size)
 
     def get(self, filename):
         if not self.active:
@@ -477,9 +496,12 @@ class Node():
             print(f"This file is already present at this node.")
             return True
 
-        file_successor_name = self.find_successor(f_id)
+        file_owner_name = self.find_key_node(filename) # also updates files_info entry
+        if file_owner_name == "":
+            print(f"{filename} was not found.")
+            return False
 
-        return self.get_node_key(file_successor_name, filename)
+        return self.get_node_key(file_owner_name, filename)
 
     def printInfo(self):
         print(f"NODE {self.id}:")
@@ -592,19 +614,16 @@ class Node():
         elif pargs[0] == "@GET":
             f_id = int(pargs[1])
             filename = self.keystore[f_id]
-            print(f"Sending {filename} to {client_addr}")
+            print(f"Uploading {filename} to {client_addr} from the start.")
             try:
-                file_size = self.files_info[filename]["size"]
+                file_size = os.path.getsize(filename)
                 with open(filename, 'rb') as outfile:
-                    bytes_sent = client_sock.sendfile(outfile)
+                   bytes_sent = client_sock.sendfile(outfile, offset=0)
 
             except socket.error:
                 client_sock.shutdown(socket.SHUT_WR)
                 client_sock.close()
             
-            #abcdefghijklmnopqrstuvwxyz
-            #print(f"File size: {file_size}")
-            #send_packet(client_sock, str(file_size))
             print(f"Bytes sent: {bytes_sent}")
             if bytes_sent == file_size:
                 print("File sending completed successfully.")
@@ -625,8 +644,18 @@ class Node():
                 client_sock.shutdown(socket.SHUT_WR)
                 client_sock.close()
 
+        elif pargs[0] == "@HAVEKEY?":
+            key = int(pargs[1])
+            response = "@NO,0"
+            if key in self.keystore:
+                filename = self.keystore[key] # then there must be a files_info entry as well, get fileSize from that
+                response = "@YES,"+str(self.files_info[filename]["size"])
+            send_packet(client_sock, response)
+
         client_sock.close()
-        return True    
+        return True
+
+        
 
     def getFileStatus(self, filename):
         if filename in self.files_info:
@@ -646,10 +675,17 @@ class Node():
             self.files_info[filename]["status"] = "Incomplete"
 
     def finishAllDownloads(self):
+        print("Resuming all downloads.")
         for filename in self.files_info:
             if self.getFileStatus(filename) == "Incomplete":
+                print(f"Paused/incomplete download found for: \'{filename}\'")
                 f_id = stringHasher(filename)
-                nodename = self.find_successor(f_id)
+                nodename = self.find_key_node(filename)
+                if nodename == "":
+                    print(f"{filename} was not found. Deleting keystore and info entry.")
+                    del files_info[filename]
+                    del self.keystore[f_id]
+
                 packet = "@PARTGET,"+str(f_id)+","+str(self.files_info[filename]["recieved"])
                 server_ip, server_portstr = nodename.split(':')
                 server_port = int(server_portstr)
@@ -676,39 +712,7 @@ def main(argv):
     #script for every node, main thing, whenever a node script is run, it goes online, connects to the network
     # use gethostbyname for IP later
     new_node = Node(host_ip, port) # listening starts right inside the constructor
-    '''
-    root = tk.Tk() # create window
-    root.geometry('300x300') # dimensions
-    root.title("21100130-DC++")
-    root.resizable(False, True) # not resizable now both vertically and horizontally
 
-    detailFrame = tk.Frame(root) # frame widget on root window
-    detail_label = tk.Label(detailFrame, text="DETAIL HERE") # Label - text widget, pack method tells where to put the widget    
-    
-    btnFrame = tk.Frame(root) # frame widget on root window
-    #tk.widget_name(root_window, properties/configuration e.g. text for label widget)
-    output_label = tk.Label(btnFrame, text="OUTPUT HERE") # Label - text widget, pack method tells where to put the widget    
-    create_btn = tk.Button(btnFrame, text="Create", command=new_node.create()) # Button widget created on root window
-    join_btn = tk.Button(btnFrame, text="Join") 
-    leave_btn = tk.Button(btnFrame, text="Leave", state="disabled")
-    put_btn = tk.Button(btnFrame, text="Put", state="disabled")
-    get_btn = tk.Button(btnFrame, text="Get", state="disabled")
-    # frame can be repositioned, so moving the UI widgets together is possible
-    
-    # pack, place, grid
-    detailFrame.pack()
-    detail_label.pack()
-    #btnFrame.pack()
-    btnFrame.place(bordermode=OUTSIDE, height=200, width=200, y=100, x=50)
-    output_label.pack()
-    create_btn.pack()
-    join_btn.pack()
-    leave_btn.pack()
-    put_btn.pack()
-    get_btn.pack()
-    
-    root.mainloop() # make sure the window stays
-    '''
     while(True):
         userin = input(">> ").split(" ")
         if userin[0] == "create":
@@ -739,6 +743,8 @@ def main(argv):
             print(in_set(userin[1], userin[2], userin[3]))
         elif userin[0] == "fad":
             new_node.finishAllDownloads()
+        elif userin[0] == "findkeynode":
+            print(new_node.find_key_node(userin[1]))
 
 if __name__ == '__main__':
     main(sys.argv[1:])
