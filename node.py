@@ -7,6 +7,7 @@ import time
 import os
 from tkinter import *
 import tkinter as tk
+from termcolor import colored
 
 #0..2^m-1
 m = 7 # if m = 7, keyspace is 0 to 127, size = 128 (2^m)
@@ -79,7 +80,7 @@ def send_node_key(nodename, filename): # remember filename can be filepath here
             return
 
         print(f"File size: {file_size}")
-        packet = "@PUT," + filename + "," + str(file_size)
+        packet = "@P," + filename + "," + str(file_size)
         server_ip, server_portstr = nodename.split(':')
         server_port = int(server_portstr)
         node_client_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -130,7 +131,9 @@ class Node():
         # first finger = node itself, second finger = immediate successor (self.id+1) # finger_table[1]
         for i in range(m): # m entries, i between 0 to m
             self.finger_table.append([]) 
-        for i in range(10): # 10 successors
+
+        self.r = 8
+        for i in range(self.r): # r successors
             self.successor_list.append([]) 
         self.node_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         try:
@@ -170,7 +173,7 @@ class Node():
             
             #move query towards fwd name, cannot be handled by this node
             #print("Forwarding to", fwd_name)
-            returned_successor = send_and_get_response(fwd_name, "@FINDS,"+str(key))
+            returned_successor = send_and_get_response(fwd_name, "@FS,"+str(key))
             #print("Returned successor", returned_successor)
             return returned_successor
 
@@ -199,11 +202,11 @@ class Node():
         # disable create, join button
         # enable put, get buttons
 
-        print(f"This node {self.name} created a network.")
+        print(colored(f"Your node {self.name} created a network!", "green"))
         # all fingers should point to myself
         self.predecessor = (-1, "") # none
         self.successor = (self.id, self.name) # itself
-        for i in range(len(self.successor_list)):
+        for i in range(self.r):
             self.successor_list[i] = [self.id, self.name]
         for i in range(len(self.finger_table)): # 1 to m, replace the node itself on all entries
             self.finger_table[i] = [self.id, self.name]
@@ -220,45 +223,47 @@ class Node():
         if self.active:
             return False
 
-        self.active = True
         # disable create, join button
         # enable put, get buttons
-        
         global isListening
         global isStabilizing
         isListening = True
         isStabilizing = True
         self.lt.start()
-        print(f"Joining the network using the node {joiner_name}.")
+        print(colored(f"Joining the network using the node {joiner_name}.", "blue"))
         # update routing information -- finger table, keystore
         # certain keys previously assigned to this node’s successor now become assigned to it
         # when (n+1) node joins/leaves -> responsibility change
         # become aware of successor
         self.predecessor = (-1, "")
-        newsuccessor = send_and_get_response(joiner_name, "@JOIN,"+self.name)
+        newsuccessor = send_and_get_response(joiner_name, "@J,"+str(self.id))
         if newsuccessor != "":
             self.setSuccessor(newsuccessor)
             for i in range(len(self.finger_table)): # 1 to m, replace the node itself on all entries
                 self.finger_table[i] = [self.successor[0], self.successor[1]]
-        
+        else:
+            return False
+
         # initialise successor list to only successor
-        for i in range(len(self.successor_list)):
+        for i in range(self.r):
             self.successor_list[i] = [self.successor[0], self.successor[1]]
         
         # if some of my keys belong to the new joiner, send them to him     
         for key in self.keystore: 
-            if self.find_successor(key) == joiner_name:
+            if self.find_file_node(self.keystore[key]) == joiner_name:
                 print(f"Sending key {key} to {joiner_name} because it belongs to him.")
                 send_node_key(joiner_name, self.keystore[key])
 
+        self.active = True
         self.st.start()
+        print(colored("Join successful!", "green"))
         return True
     
     def notifySuccessor(self): # tell them to update their immediate predecessor, and get your predecessor
         if self.successor[1] == "":
             return False
 
-        newpredecessor = send_and_get_response(self.successor[1], "@HI_S_GIVE_P,"+self.name)
+        newpredecessor = send_and_get_response(self.successor[1], "@NSGP,"+self.name)
         if newpredecessor != "":
             self.setPredecessor(newpredecessor)
 
@@ -267,6 +272,7 @@ class Node():
     def setSuccessor(self, new_successor_name):
         self.successor = (stringHasher(new_successor_name),new_successor_name)
         self.finger_table[0] = [self.successor[0], new_successor_name]
+        self.successor_list[0] = [self.successor[0], new_successor_name]
     
     def setPredecessor(self, new_predecessor_name):
         self.predecessor = (stringHasher(new_predecessor_name),new_predecessor_name)
@@ -279,10 +285,10 @@ class Node():
             return False
         pings = 3
         while(pings != 0):
-            response = send_and_get_response(nodename, "@ACTIVE?")
+            response = send_and_get_response(nodename, "@A?")
             if response == "":
                 return False
-            elif response == "@YESACTIVE":
+            elif response == "@Y":
                 pings -= 1
             else:
                 return False
@@ -299,25 +305,36 @@ class Node():
             self.predecessor = (-1, "") # none predecessor
             return False
         return True
+    
+    def fetch_node_succlist(self, nodename):
+        bsucclist = send_and_get_response(nodename,"@GSL")
+        if not bsucclist:
+            return [] # empty list
+        sslist = pickle.loads(bsucclist.encode())
+        return sslist
 
-    def fix_successor_list(self):
-        slist = self.getSuccessorListFromNode(self.successor[1]);
-
-        successor_list[1] = [self.successor[0], self.successor[1]];
-        
-        for i in range(2, 10):
-            successor_list[i] = [slist[i-2][0], slist[i-2][1]]
-        
     def isSuccessorActive(self):
         if self.successor[1] == "":
             return False
 
-        if not self.checkNodeActive(self.successor[1]): # if not alive
-            #self.setSuccessor(self.finger_table[0], self.finger_table[1])
-            #print("Get successor")
-            self.setSuccessor(self.find_successor(self.id))
-            self.notifySuccessor()
+        self.successor_list[0] = [self.successor[0], self.successor[1]]
+        current_successor = self.successor_list[0]
+        while not self.checkNodeActive(current_successor[1]): 
+            # until an alive successor is found in the list
+            del self.successor_list[0] # delete head, current successor
+            self.successor_list.append([]) # append a [] to keep the length of the list constant
+            # new head checked now
+            current_successor = self.successor_list[0] # head of successor list is always current successor
+            if current_successor == []: # empty list, not going to happen with our assumption that there always exists one live node
+                return False # stop if [] element reached
+
+        slist = self.fetch_node_succlist(current_successor[1]); # slist fetched from live successor
+        if slist == []:
             return False
+        for i in range(1, self.r):
+            self.successor_list[i] = slist[i-1]
+
+        self.setSuccessor(self.successor_list[0][1])
         return True
 
     def fix_finger_table(self):
@@ -336,9 +353,13 @@ class Node():
 
     def stabilizer(self):
         global isStabilizing
+        stabilizedTimes = 0
         while isStabilizing:
-            time.sleep(0.5)
-            #self.isSuccessorActive() # successor lists
+            time.sleep(2) 
+            stabilizedTimes += 1
+            if stabilizedTimes % 10 == 0: # every 5 stabilization calls
+                self.finishAllDownloads()
+            self.isSuccessorActive() # successor lists
             self.isPredecessorActive()
             self.fix_finger_table()
             self.stabilize()
@@ -347,7 +368,7 @@ class Node():
     def stabilize(self):
         # ask successor about predecessor
         if self.successor[1] != "":
-            successor_pred_x = send_and_get_response(self.successor[1], "@GIVE_P")
+            successor_pred_x = send_and_get_response(self.successor[1], "@GP")
             # verifies if my immediate successor is consistent (no node x has come in between us, if it has that x is our successor)
             if successor_pred_x != "":
                 x = stringHasher(successor_pred_x)
@@ -376,11 +397,11 @@ class Node():
 
         # send message to successor to update their predecessor to my predecessor
         if (succ_name != self.name and succ_name != ""):
-            send_node_msg(succ_name, "@UPDATE_P,"+pred_name)
+            send_node_msg(succ_name, "@UP,"+pred_name)
 
         # send message to predecessor to update their successor to my successor
         if (pred_name != self.name and pred_name != ""):
-            send_node_msg(pred_name, "@UPDATE_S,"+succ_name)
+            send_node_msg(pred_name, "@US,"+succ_name)
         
         self.finger_table.clear() # clear finger table
         for i in range(m): # m entries, i between 0 to m
@@ -433,22 +454,20 @@ class Node():
         # file will be recieved as text string and stored as .txt
         return send_node_key(file_successor_name, filename)
    
-    def find_key_node(self, filename): # and add key file info to files_info
+    def find_file_node(self, filename): # and add key file info to files_info
         key = stringHasher(filename) # get f_id
         targetNode = self.find_successor(key)
         tries = 5 # try 5 times, else file not found
-
         while tries >= 0:
-            response = send_and_get_response(targetNode, "@HAVEKEY?,"+str(key))
+            response = send_and_get_response(targetNode, "@HK?,"+str(key))
             rargs = response.split(",")
-            if rargs[0] == "@NO":
+            if rargs[0] == "@N":
                 targetNode = self.find_successor(stringHasher(targetNode)) # find the successor of that target node and restart process
                 # overwrote targetNode, now target is their successor
-            elif rargs[0] == "@YES":
+            elif rargs[0] == "@Y":
                 self.files_info[filename] = {"status":"Incomplete","size":int(rargs[1]),"recieved":0}
                 return targetNode
             tries -= 1
-
         return "" # node with key not found
 
 
@@ -459,7 +478,7 @@ class Node():
             print("The file is completely downloaded and present here. Cannot get again.")
             return False
         
-        packet = "@GET,"+str(f_id)
+        packet = "@G,"+str(f_id)
         server_ip, server_portstr = nodename.split(':')
         server_port = int(server_portstr)
         try:
@@ -496,7 +515,7 @@ class Node():
             print(f"This file is already present at this node.")
             return True
 
-        file_owner_name = self.find_key_node(filename) # also updates files_info entry
+        file_owner_name = self.find_file_node(filename) # also updates files_info entry
         if file_owner_name == "":
             print(f"{filename} was not found.")
             return False
@@ -504,13 +523,14 @@ class Node():
         return self.get_node_key(file_owner_name, filename)
 
     def printInfo(self):
-        print(f"NODE {self.id}:")
-        print(f"ACTIVE: {self.active}")
-        print(f"SUCCESSOR: {self.successor}")
-        print(f"PREDECESSOR: {self.predecessor}")
-        print("FINGER TABLE:", self.finger_table)
-        print("KEY STORE:", self.keystore)
-        print("FILES INFO:", self.files_info)
+        print(colored(f"NODE {self.id}", "yellow"))
+        print(colored(f"SUCCESSOR: {self.successor}","yellow"))
+        print(colored(f"PREDECESSOR: {self.predecessor}","yellow"))
+        print(colored("SUCCESSOR LIST:", "blue"), self.successor_list)
+        print(colored("FINGER TABLE:","red"), self.finger_table)
+        print(colored("KEY STORE:","green"), self.keystore)
+        print(colored("FILES INFO:","green"), self.files_info)
+        print(colored(f"ACTIVE: {self.active}", "green"))
 
     def listener(self):
         # thread locks
@@ -542,22 +562,26 @@ class Node():
             client_sock.close()
             return False
         
-
         pargs = packet.split(',') # list of arguments obtained from packet
-        if pargs[0] == "@ACTIVE?" and self.active: #@ALIVE,192.168.0.1:5004
-            send_packet(client_sock, "@YESACTIVE")
+        task = pargs[0]
+        if task == "@A?" and self.active: #@ALIVE?
+            send_packet(client_sock, "@Y")
 
-        elif pargs[0] == "@JOIN": #@JOIN,192.168.0.1:5004
-            sender_id = stringHasher(pargs[1])
-            send_packet(client_sock, self.find_successor(sender_id))
-        
-        elif pargs[0] == "@FINDS": # find successor query
+        elif task == "@FS": # find successor query
             #print(f"Find query recieved.",pargs)
             their_successor = self.find_successor(int(pargs[1]))
             send_packet(client_sock, their_successor)
 
+        elif task == "@HK?": #@HAVEKEY?
+            key = int(pargs[1])
+            response = "@N,0"
+            if key in self.keystore:
+                filename = self.keystore[key] # then there must be a files_info entry as well, get fileSize from that
+                response = "@Y,"+str(self.files_info[filename]["size"])
+            send_packet(client_sock, response)
+
         # the node that said hi thinks he might be our predecessor
-        elif pargs[0] == "@HI_S_GIVE_P": # notify
+        elif task == "@NSGP": #@NOTIFY_SUCCESSOR_GET_PREDECESSOR
             new_pred_name = pargs[1]
             old_pred_name = self.predecessor[1]
             old_pred_id = self.predecessor[0]
@@ -577,18 +601,18 @@ class Node():
                 send_packet(client_sock, "")
             #print("My new predecessor: ", self.predecessor)
             
-        elif pargs[0] == "@GIVE_P":
+        elif task == "@GP": #@GET_PREDECESSOR
             send_packet(client_sock, self.predecessor[1])
 
-        elif pargs[0] == "@UPDATE_S":
+        elif task == "@US": #@UPDATE_SUCCESSOR
             self.setSuccessor(pargs[1])
             #print("Updating to a new successor: ", self.successor)
         
-        elif pargs[0] == "@UPDATE_P":
+        elif task == "@UP": #@UPDATE_PREDECESSOR
             self.setPredecessor(pargs[1])
             #print("Updating to a new predecessor: ", self.predecessor)
             
-        elif pargs[0] == "@PUT":
+        elif task == "@P": #@PUT
             filename = pargs[1]
             print(f"Downloading {filename}")
             file_size = int(pargs[2])
@@ -611,7 +635,7 @@ class Node():
             current_file_size = os.path.getsize(filename)
             self.setFileInfo(filename, file_size, current_file_size)
             
-        elif pargs[0] == "@GET":
+        elif task == "@G": #@GET
             f_id = int(pargs[1])
             filename = self.keystore[f_id]
             print(f"Uploading {filename} to {client_addr} from the start.")
@@ -630,7 +654,7 @@ class Node():
             else:
                 print("Incomplete send executed.")
 
-        elif pargs[0] == "@PARTGET":
+        elif task == "@PG": #@PARTIAL_GET
             f_id = int(pargs[1])
             filename = self.keystore[f_id]
             bytes_offset = int(pargs[2])
@@ -644,18 +668,20 @@ class Node():
                 client_sock.shutdown(socket.SHUT_WR)
                 client_sock.close()
 
-        elif pargs[0] == "@HAVEKEY?":
-            key = int(pargs[1])
-            response = "@NO,0"
-            if key in self.keystore:
-                filename = self.keystore[key] # then there must be a files_info entry as well, get fileSize from that
-                response = "@YES,"+str(self.files_info[filename]["size"])
-            send_packet(client_sock, response)
-
-        client_sock.close()
-        return True
-
+        elif task == "@GSL": #@GET_SUCCESSOR_LIST
+            send_packet(client_sock, pickle.dumps(self.successor_list, 0).decode()) # protocol 0 results in shorter bytestrings
         
+        elif task == "@J": #@JOIN,33
+            sender_id = int(pargs[1])
+            send_packet(client_sock, self.find_successor(sender_id))
+        
+        client_sock.close()
+
+    def getSuccessorName(self):
+        return self.successor[1]
+
+    def getSuccessorList(self):
+        return self.successor_list
 
     def getFileStatus(self, filename):
         if filename in self.files_info:
@@ -675,18 +701,18 @@ class Node():
             self.files_info[filename]["status"] = "Incomplete"
 
     def finishAllDownloads(self):
-        print("Resuming all downloads.")
         for filename in self.files_info:
+            print("Resuming all downloads.")
             if self.getFileStatus(filename) == "Incomplete":
                 print(f"Paused/incomplete download found for: \'{filename}\'")
                 f_id = stringHasher(filename)
-                nodename = self.find_key_node(filename)
+                nodename = self.find_file_node(filename)
                 if nodename == "":
                     print(f"{filename} was not found. Deleting keystore and info entry.")
                     del files_info[filename]
                     del self.keystore[f_id]
 
-                packet = "@PARTGET,"+str(f_id)+","+str(self.files_info[filename]["recieved"])
+                packet = "@PG,"+str(f_id)+","+str(self.files_info[filename]["recieved"])
                 server_ip, server_portstr = nodename.split(':')
                 server_port = int(server_portstr)
                 node_client_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -705,7 +731,6 @@ class Node():
                 current_file_size = os.path.getsize(filename)
                 self.setFileInfo(filename, self.files_info[filename]["size"], current_file_size)
 
-
 def main(argv):
     host_ip, port = argv[0], int(argv[1]) # use all available IP addresses (both localhost and any public addresses configured)
     
@@ -715,36 +740,32 @@ def main(argv):
 
     while(True):
         userin = input(">> ").split(" ")
-        if userin[0] == "create":
+        if userin[0] == "c": # create
             new_node.create()
-        elif userin[0] == "join":
+        elif userin[0] == "j": # join
             if not new_node.join("127.0.0.1:"+str(userin[1])):
-                print("Failed to join the network.")
+                print(colored("Failed to join the network.", "white"))
         elif userin[0] == "leave":
             new_node.leave()
-        elif userin[0] == "msg":
-            send_node_msg(userin[1], input("Enter message here: "))
         elif userin[0] == "checkactive":
             if new_node.checkNodeActive(userin[1]):
-                print("That node is active.")
+                print(colored("Failed to join the network.", "green"))
             else:
                 print("Not active.")
-        elif userin[0] == "print":
+        elif userin[0] == "p": # print
             new_node.printInfo()
         elif userin[0] == "cls":
             os.system('clear')
-        elif userin[0] == "put":
+        elif userin[0] == "upload":
             new_node.put(userin[1])
-        elif userin[0] == "get":
+        elif userin[0] == "download":
             new_node.get(userin[1])
         elif userin[0] == "finds":
-            print("Found successor:", stringHasher(new_node.find_successor(int(userin[1]))))
-        elif userin[0] == "checkin":
-            print(in_set(userin[1], userin[2], userin[3]))
+            print(colored("Found successor:", "green"), stringHasher(new_node.find_successor(int(userin[1]))))
         elif userin[0] == "fad":
             new_node.finishAllDownloads()
         elif userin[0] == "findkeynode":
-            print(new_node.find_key_node(userin[1]))
+            print(colored(new_node.find_file_node(userin[1]), "green"))
 
 if __name__ == '__main__':
     main(sys.argv[1:])
